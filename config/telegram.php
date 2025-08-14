@@ -32,22 +32,32 @@ return [
     */
     'bots' => [
         'amir' => [
-            'token' => env('BOT_AMIR'),
-            'certificate_path' => env('TELEGRAM_CERTIFICATE_PATH', 'YOUR-CERTIFICATE-PATH'),
-            'webhook_url' => env('TELEGRAM_WEBHOOK_URL', 'YOUR-BOT-WEBHOOK-URL'),
-            /*
-             * @see https://core.telegram.org/bots/api#update
-             */
-            'allowed_updates' => null,
-            'commands' => [
-                // Acme\Project\Commands\MyTelegramBot\BotCommand::class
+            'token'            => env('BOT_AMIR'),
+            'certificate_path' => null,   // ngrok/SSL معتبر → null
+            'webhook_url'      => null,   // ما خودمان set می‌کنیم
+            'allowed_updates'  => null,
+            'commands'         => [
+                App\Bots\Amir\Commands\StartCommand::class,
+                // فرمان‌های اختصاصی amir
             ],
         ],
 
-        //        'mySecondBot' => [
-        //            'token' => '123456:abc',
-        //        ],
+        'mtr' => [
+            'token'            => env('BOT_MTR'),
+            'certificate_path' => null,
+            'webhook_url'      => null,
+            'allowed_updates'  => null,
+            'commands'         => [
+                App\Bots\Mtr\Commands\StartCommand::class,
+                // فرمان‌های اختصاصی mtr
+            ],
+        ],
     ],
+
+    'default' => 'amir', // هرکدام که خواستی
+    'resolve_command_dependencies' => true,
+    'commands' => [ /* دستورات سراسری اگر داری (ترجیحاً خالی بماند) */ ],
+];
 
     /*
     |--------------------------------------------------------------------------
@@ -191,8 +201,7 @@ return [
                 'status', // Shared Command Name.
                 'Acme\Project\Commands\BotCommand' // Full Path to Command Class.
            ],
-        */
-    ],
+        */],
 
     /*
     |--------------------------------------------------------------------------
