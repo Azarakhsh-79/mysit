@@ -1,47 +1,82 @@
 <?php
-
 namespace App\Bots\Amir;
 
+use App\Bots\Amir\BotHandler;
 use Telegram\Bot\Api;
 use Telegram\Bot\Objects\Update;
+use Illuminate\Support\Facades\Log;
 
 class AmirBotHandler
 {
-    public function __construct(private Api $bot) {}
+    private string $botLink;
+
+    public function __construct(private Api $bot)
+    {
+        $this->botLink = config("telegram.bots.amir.link", "YourBotName_bot");
+    }
 
     public function handle(Update $update): void
     {
-        $message       = $update->getMessage() ?? $update->getEditedMessage();
-        $callbackQuery = $update->getCallbackQuery();
+        try {
+            if ($inlineQuery = $update->getInlineQuery()) {
+                $botHandler = new BotHandler(
+                    $this->bot,
+                    $inlineQuery->getFrom()->getId(),
+                    $inlineQuery->getQuery(),
+                    null,
+                    [],
+                    $this->botLink 
+                );
+                $botHandler->handleInlineQuery($inlineQuery->toArray());
+            } elseif ($callbackQuery = $update->getCallbackQuery()) {
+                $message = $callbackQuery->getMessage();
+                $botHandler = new BotHandler(
+                    $this->bot,
+                    $message?->getChat()->getId(),
+                    '',
+                    $message?->getMessageId(),
+                    $message?->toArray() ?? [],
+                    $this->botLink
+                );
+                $botHandler->handleCallbackQuery($callbackQuery->toArray());
+            } elseif ($preCheckout = $update->getPreCheckoutQuery()) {
+                $botHandler = new BotHandler(
+                    $this->bot,
+                    $preCheckout->getFrom()->getId(),
+                    null,
+                    null,
+                    [],
+                    $this->botLink
+                );
+                $botHandler->handlePreCheckoutQuery($update->toArray());
+            } elseif ($message = $update->getMessage() ?? $update->getEditedMessage()) {
+                $chatId = $message->getChat()->getId();
+                $this->bot->sendChatAction(['chat_id' => $chatId, 'action' => 'typing']);
 
-        if ($callbackQuery) {
-            $this->bot->answerCallbackQuery([
-                'callback_query_id' => $callbackQuery->getId(),
-                'text'              => 'Amir: callback received.',
+                $botHandler = new BotHandler(
+                    $this->bot, 
+                    $chatId,
+                    (string)($message->getText() ?? $message->getCaption() ?? ''),
+                    $message->getMessageId(),
+                    $message->toArray(),
+                    $this->botLink
+                );
+
+                if ($message->getSuccessfulPayment()) {
+                    $botHandler->handleSuccessfulPayment($update->toArray());
+                } else {
+                    $botHandler->handleRequest();
+                }
+            } else {
+                Log::info('MTR: Unhandled update type');
+            }
+        } catch (\Throwable $e) {
+            Log::error('MTR dispatch error: ' . $e->getMessage(), [
+                'file'    => $e->getFile(),
+                'line'    => $e->getLine(),
+                'trace'   => $e->getTraceAsString(),
+                'payload' => $update->toArray(),
             ]);
-            return;
         }
-
-        if (!$message) {
-            return;
-        }
-
-        $chatId = $message->getChat()->getId();
-        $text   = (string)($message->getText() ?? '');
-
-        // دستورات اختصاصی amir
-        if ($text === '/start') {
-            $this->bot->sendMessage([
-                'chat_id' => $chatId,
-                'text'    => "Amir Bot: خوش اومدی 🌟",
-            ]);
-            return;
-        }
-
-        // منطق پیش‌فرض
-        $this->bot->sendMessage([
-            'chat_id' => $chatId,
-            'text'    => "Amir Bot: شما نوشتید → {$text}",
-        ]);
     }
 }

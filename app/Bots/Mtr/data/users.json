@@ -1,0 +1,49 @@
+{
+    "199057701": {
+        "first_name": "Azarakhsh",
+        "last_name": null,
+        "username": "Amir_79_S",
+        "updated_at": "2025-08-15 16:19:22",
+        "id": 199057701,
+        "language_code": "en",
+        "created_at": "2025-08-14 19:15:55",
+        "status": "active",
+        "is_admin": true,
+        "state": "",
+        "state_data": "",
+        "message_id": 1644,
+        "message_ids": [
+            1672,
+            1673,
+            1674
+        ],
+        "cart": "{\"25\":4,\"5\":9,\"24\":7}",
+        "favorites": "[5]",
+        "shipping_name": "امیر",
+        "shipping_phone": "09334590631",
+        "shipping_address": "تست برای ادرس"
+    },
+    "7184203071": {
+        "first_name": "امیر",
+        "last_name": "سلیمانی",
+        "username": "Amir_soleimani_79",
+        "updated_at": "2025-08-15 12:23:19",
+        "id": 7184203071,
+        "language_code": "en",
+        "created_at": "2025-08-15 12:10:42",
+        "status": "active",
+        "is_admin": false,
+        "state": "",
+        "state_data": "",
+        "message_ids": [
+            1446,
+            1447,
+            1448,
+            1449,
+            1450,
+            1451
+        ],
+        "favorites": "[10]",
+        "cart": "{\"9\":2}"
+    }
+}
