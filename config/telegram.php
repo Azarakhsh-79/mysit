@@ -18,6 +18,7 @@ return [
         'mtr' => [
             'token'            => env('BOT_MTR'),
             'certificate_path' => null,
+            
             'webhook_url'      => null,
             'link'             => 'https://t.me/MTR_stone_bot?start=',
             'allowed_updates'  => null,

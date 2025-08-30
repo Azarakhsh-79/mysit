@@ -6,33 +6,79 @@ namespace App\Bots\Mtr;
 
 use Telegram\Bot\Api;
 use Illuminate\Support\Facades\Log;
-use Psr\Http\Message\ResponseInterface;
-use Telegram\Bot\TelegramResponse;
-use Telegram\Bot\Objects\TelegramObject;
-
+use App\Models\User;
 
 class BotHandler
 {
-
-    private Api $telegram;
+    // --- خصوصیات کلاس ---
+    private Api $bot;
     private string $botLink;
-    private  $callbackQueryId;
-    private  $botToken;
+    private string $text;
+    private ?int $messageId;
+    private array $message;
+    private int $chatId;
 
+    // آبجکت کاربر که پس از لود شدن، در تمام متدها در دسترس است
+    private User $user;
 
+    // نمونه‌های کلاس تطبیق‌دهنده برای کار با جداول مختلف
+    private Jsondb $UDb; // Users Database
+    private Jsondb $PDb; // Products Database
+    private Jsondb $CDb; // Categories Database
+    private Jsondb $IDb; // Invoices Database
+    private Jsondb $SDb; // Settings Database
+
+    /**
+     * سازنده کلاس که با هر آپدیت جدید از طرف MtrBotHandler فراخوانی می‌شود
+     */
     public function __construct(
-        Api $telegram,
-        private ?int $chatId,
-        private ?string $text,
-        private ?int $messageId,
-        private ?array $message,
-        string $botLink = ''
+        Api $bot,
+        int $chatId,
+        string $text,
+        ?int $messageId,
+        array $message,
+        string $botLink
     ) {
-        $this->botToken = config('telegram.bots.mtr.token');
-
-        $this->telegram = $telegram;
+        // --- مقداردهی اولیه خصوصیات ---
+        $this->bot = $bot;
+        $this->chatId = $chatId;
+        $this->text = $text;
+        $this->messageId = $messageId;
+        $this->message = $message;
         $this->botLink = $botLink;
+
+        // --- ساخت نمونه‌های لازم برای کار با دیتابیس از طریق مترجم Jsondb ---
+        $this->UDb = new Jsondb('users');
+        $this->PDb = new Jsondb('products');
+        $this->CDb = new Jsondb('categories');
+        $this->IDb = new Jsondb('invoices');
+        $this->SDb = new Jsondb('settings');
+
+        // --- پیدا کردن یا ساختن کاربر ---
+        // با استفاده از مترجم، کاربر را بر اساس شناسه تلگرام او پیدا می‌کنیم
+        $userObject = $this->UDb->get($this->chatId);
+
+        if (!$userObject) {
+            // اگر کاربر وجود نداشت، با اطلاعات پیام او را می‌سازیم
+            $telegramUser = $this->message['from'];
+            $this->UDb->insert([
+                'id'         => $telegramUser['id'], // در Jsondb به telegram_id تبدیل می‌شود
+                'first_name' => $telegramUser['first_name'],
+                'last_name'  => $telegramUser['last_name'] ?? null,
+                'username'   => $telegramUser['username'] ?? null,
+                'name'       => $telegramUser['first_name'] . ' ' . ($telegramUser['last_name'] ?? ''),
+            ]);
+            // کاربر ساخته شده را دوباره از دیتابیس می‌خوانیم تا یک آبجکت کامل داشته باشیم
+            $userObject = $this->UDb->get($this->chatId);
+        }
+        
+        // آبجکت کاربر را در خصوصیت کلاس ذخیره می‌کنیم تا در همه جا در دسترس باشد
+        $this->user = $userObject;
     }
+
+
+
+
 
     public function deleteMessage(int $messageId, int $delay = 0): bool
     {
@@ -44,7 +90,7 @@ class BotHandler
         }
 
         try {
-            return $this->telegram->deleteMessage([
+            return $this->bot->deleteMessage([
                 'chat_id'    => $this->chatId,
                 'message_id' => $messageId,
             ]);
@@ -57,21 +103,27 @@ class BotHandler
         }
     }
 
-
-    public function deleteMessages(array $messageIds): bool
+    public function deleteMessages($messageIds = null): bool
     {
+        if (empty($messageIds)) {
+            $messageIdsjson = $this->user->message_ids;
+            if (!empty($messageIds)) {
+                $messageIds = json_decode($messageIdsjson, true);
+            }
+        }
+
         if (!$this->chatId || empty($messageIds) || count($messageIds) > 100) {
             return false;
         }
 
         try {
-            $success = $this->telegram->deleteMessages([
+            $success = $this->bot->deleteMessages([
                 'chat_id'     => $this->chatId,
                 'message_ids' => $messageIds,
             ]);
 
             if ($success) {
-                DB::table('users')->unsetKey($this->chatId, 'messages_ids');
+                $this->UDb->unsetKey($this->chatId, 'message_ids');
                 return true;
             }
 
@@ -93,8 +145,8 @@ class BotHandler
             return;
         }
 
-        $currentUser = DB::table('users')->findById($this->chatId);
-        $state = $currentUser['state'] ?? '';
+
+        $state = $this->user->state ?? '';
 
         try {
 
@@ -121,35 +173,38 @@ class BotHandler
                     return;
                 }
                 $newQuantity = (int) $newQuantity;
-
-                $product = DB::table('products')->findById($productId);
+                $product = $this->PDb->get($productId);
                 if (!$product) {
                     $this->Alert("خطا: محصول یافت نشد.");
-                    DB::table('users')->update($this->chatId, ['state' => '', 'state_data' => '']);
+                    $this->user->state = null;
+                    $this->user->state_data = null;
+                    $this->user->save();
                     return;
                 }
 
-                $stock = (int) $product['count'];
+                $stock = (int) $product->count;
                 if ($newQuantity > $stock) {
                     $this->Alert("⚠️ تعداد درخواستی ({$newQuantity} عدد) بیشتر از موجودی انبار ({$stock} عدد) است.");
                     return;
                 }
 
-                $cart = json_decode($currentUser['cart'] ?? '{}', true);
+                $cart = json_decode($this->user->cart ?? '{}', true);
                 if ($newQuantity > 0) {
                     $cart[$productId] = $newQuantity;
                 } else {
                     unset($cart[$productId]);
                 }
-                DB::table('users')->update($this->chatId, ['cart' => json_encode($cart)]);
 
-                $stateData = json_decode($currentUser['state_data'] ?? '{}', true);
+                $this->user->cart = json_encode($cart);
+
+                $stateData = json_decode($this->user->state_data ?? '{}', true);
                 $originalMessageId = $stateData['message_id'] ?? null;
                 $isFromEditCart = $stateData['from_edit_cart'] ?? false;
-                DB::table('users')->update($this->chatId, ['state' => '', 'state_data' => '']);
+                $this->user->state = null;
+                $this->user->state_data = null;
+                $this->user->save();
 
                 if ($originalMessageId) {
-
                     if ($isFromEditCart) {
                         $this->refreshCartItemCard($productId, $originalMessageId);
                     } else {
@@ -161,7 +216,10 @@ class BotHandler
             }
             if (str_starts_with($this->text, "/start")) {
                 $this->deleteMessage($this->messageId);
-                DB::table('users')->update($this->chatId, ['state' => '', 'state_data' => '']);
+                $this->user->state = null;
+                $this->user->state_data = null;
+                $this->user->save();
+
                 $parts = explode(' ', $this->text);
                 if (isset($parts[1]) && str_starts_with($parts[1], 'product_')) {
                     $productId = (int) str_replace('product_', '', $parts[1]);
@@ -174,8 +232,7 @@ class BotHandler
                 $this->mini_app();
                 return;
             } elseif ($this->text === "/cart") {
-                if (!empty($currentUser['message_ids']))
-                    $this->deleteMessages($currentUser['message_ids']);
+                $this->deleteMessages();
                 $this->showCart();
                 return;
             } elseif ($this->text === "/search") {
@@ -183,7 +240,7 @@ class BotHandler
                 return;
             } elseif ($this->text === "/favorites") {
                 if (!empty($currentUser['message_ids']))
-                    $this->deleteMessages($currentUser['message_ids']);
+                    $this->deleteMessages();
                 $this->showFavoritesList();
                 return;
             } elseif (str_starts_with($state, 'awaiting_receipt_')) {
@@ -196,17 +253,17 @@ class BotHandler
                 $invoiceId = str_replace('awaiting_receipt_', '', $state);
                 $receiptFileId = end($this->message['photo'])['file_id'];
 
-                DB::table('invoices')->update($invoiceId, [
+                $this->IDb->update($invoiceId, [
                     'receipt_file_id' => $receiptFileId,
                     'status' => 'payment_review'
                 ]);
 
-                DB::table('users')->update($this->chatId, ['state' => '']);
+                $this->user->state = null; 
+                $this->user->save();
 
                 $this->Alert("✅ رسید شما با موفقیت دریافت شد. پس از بررسی، نتیجه به شما اطلاع داده خواهد شد. سپاس از خرید شما!");
                 $this->notifyAdminOfNewReceipt($invoiceId, $receiptFileId);
                 $this->MainMenu();
-
 
                 return;
             } elseif (strpos($state, 'editing_product_') === 0) {
@@ -230,9 +287,11 @@ class BotHandler
                     $this->Alert("خطا: شناسه دسته‌بندی مشخص نشده است.");
                     return;
                 }
-                $res = DB::table('categories')->update($categoryId, ['name' => $categoryName]);
+                $res = $this->CDb->update($categoryId, ['name' => $categoryName]);
                 if ($res) {
-                    DB::table('users')->update($this->chatId, ['state' => '']);
+                    $this->user->state = null; 
+                    $this->user->save();
+
                     $messageId = $this->getMessageId($this->chatId);
                     $this->sendRequest("editMessageText", [
                         "chat_id" => $this->chatId,
@@ -261,7 +320,8 @@ class BotHandler
                 $messageId = $this->getMessageId($this->chatId);
                 if ($res) {
                     $this->deleteMessage($this->messageId);
-                    DB::table('users')->update($this->chatId, ['state' => '']);
+                     $this->user->state = null; 
+                    $this->user->save();
 
                     $this->Alert("دسته‌بندی جدید با موفقیت ایجاد شد.");
                     $this->showCategoryManagementMenu($messageId ?? null);
@@ -281,12 +341,15 @@ class BotHandler
                     return;
                 }
 
-                $userData = DB::table('users')->findById($this->chatId);
+                $userData = $this->user->toArray();
                 $stateData = json_decode($userData['state_data'] ?? '{}', true);
                 $messageId = $stateData['message_id'] ?? null;
 
-                DB::table('settings')->set($key, $value);
-                DB::table('users')->update($this->chatId, ['state' => '', 'state_data' => '']);
+                $this->SDb->set($key, $value);
+
+                $this->user->state = null;
+                $this->user->state_data = null;
+                $this->user->save();
 
                 $this->showBotSettingsMenu($messageId);
                 return;
@@ -300,12 +363,12 @@ class BotHandler
     }
 
 
-    public function handleCallbackQuery($callbackQuery): void
+    public function handleCallbackQuery(array $callbackQuery): void
     {
         $chatId = $callbackQuery["message"]["chat"]["id"] ?? null;
-        $messageId = $callbackQuery["message"]["message_id"] ?? null;
+        $messageId = $callbackQuery["message"]["message_id"] ?? $this->messageId;
         $callbackData = $callbackQuery["data"] ?? null;
-        $this->callbackQueryId = $callbackQuery["id"] ?? null;
+        $callbackQueryId = $callbackQuery["id"] ?? null;
 
         if (!$chatId)
             return;
@@ -314,11 +377,14 @@ class BotHandler
         }
 
         try {
+
             if ($callbackData === 'main_menu') {
-                $user = DB::table('users')->findById($this->chatId);
-                if (!empty($user['message_ids'])) {
-                    $this->deleteMessages($user['message_ids']);
+                $messageIdsJson = $this->user->message_ids;
+                if (!empty($messageIdsJson)) {
+                    $messageIdsArray = json_decode($messageIdsJson, true);
+                    $this->deleteMessages($messageIdsArray);
                 }
+
                 $this->MainMenu($messageId);
                 return;
             } elseif ($callbackData === 'my_orders') {
@@ -343,10 +409,6 @@ class BotHandler
                 $this->showSupportInfo($messageId);
                 return;
             } elseif ($callbackData === 'main_menu2') {
-                $user = DB::table('users')->findById($this->chatId);
-                if (!empty($user['message_ids'])) {
-                    $this->deleteMessages($user['message_ids']);
-                }
                 $this->deleteMessage($this->messageId);
                 $this->MainMenu();
                 return;
@@ -384,12 +446,10 @@ class BotHandler
                     return;
                 }
 
-                // ذخیره وضعیت کاربر و messageId برای بازگشت
                 $stateData = json_encode(['message_id' => $messageId]);
-                DB::table('users')->update($this->chatId, [
-                    'state' => "editing_setting_{$key}",
-                    'state_data' => $stateData
-                ]);
+                $this->user->state = "editing_setting_{$key}";
+                $this->user->state_data = $stateData;
+                $this->user->save();
 
                 $promptText = "لطفاً مقدار جدید برای \"{$fieldMap[$key]}\" را ارسال کنید.";
                 $this->Alert($promptText, true);
@@ -400,34 +460,36 @@ class BotHandler
                 return;
             } elseif (str_starts_with($callbackData, 'admin_approve_')) {
                 $invoiceId = str_replace('admin_approve_', '', $callbackData);
+                $invoice = $this->IDb->findById($invoiceId); // Use findById to be sure
 
-
-                $invoice = DB::table('invoices')->findById($invoiceId);
-
-                if (!$invoice || $invoice['status'] === 'approved') {
+                if (!$invoice || $invoice->status === 'approved') {
                     $this->Alert("این فاکتور قبلاً تایید شده یا یافت نشد.");
                     return;
                 }
 
-                $productsTable = DB::table('products');
-                foreach ($invoice['products'] as $purchasedProduct) {
-                    $productId = $purchasedProduct['id'];
-                    $quantityPurchased = $purchasedProduct['quantity'];
+                $purchasedItems = json_decode($invoice->cart_items, true);
 
-                    $productData = $productsTable->findById($productId);
-                    if ($productData) {
-                        $newCount = $productData['count'] - $quantityPurchased;
-                        $newCount = max(0, $newCount);
-                        $productsTable->update($productId, ['count' => $newCount]);
+                if (is_array($purchasedItems)) {
+                    foreach ($purchasedItems as $item) {
+                        $productId = $item['id'];
+                        $quantityPurchased = $item['quantity'];
+                        $productData = $this->PDb->findById($productId); // Use findById to be sure
+
+                        if ($productData) {
+                            $newCount = $productData->count - $quantityPurchased;
+                            $newCount = max(0, $newCount);
+                            $this->PDb->update($productId, ['count' => $newCount]);
+                        }
                     }
                 }
-                DB::table('invoices')->update($invoiceId, ['status' => 'approved']);
 
-                $invoice = DB::table('invoices')->findById($invoiceId);
-                $userId = $invoice['user_id'] ?? null;
-                if ($userId) {
+                $this->IDb->update($invoiceId, ['status' => 'approved']);
+
+                $user = $this->UDb->findById($invoice->user_id);
+
+                if ($user) {
                     $this->sendRequest("sendMessage", [
-                        'chat_id' => $userId,
+                        'chat_id' => $user->telegram_id,
                         'text' => "✅ سفارش شما با شماره فاکتور `{$invoiceId}` تایید شد و به زودی برای شما ارسال خواهد شد. سپاس از خرید شما!",
                         'parse_mode' => 'HTML'
                     ]);
@@ -1354,7 +1416,7 @@ class BotHandler
             $this->deleteMessages($user['message_ids']);
         }
 
-       
+
         $hour      = (int) jdf::jdate('H', '', '', '', 'en');
         $firstName = trim((string)($user['first_name'] ?? ''));
         $greetName = $firstName !== '' ? ' ' . htmlspecialchars($firstName, ENT_QUOTES, 'UTF-8') : '';

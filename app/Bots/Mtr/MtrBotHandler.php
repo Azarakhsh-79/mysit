@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Bots\Mtr;
 
 use App\Bots\Mtr\BotHandler;
@@ -18,57 +19,47 @@ class MtrBotHandler
     public function handle(Update $update): void
     {
         try {
-            if ($inlineQuery = $update->getInlineQuery()) {
-                $botHandler = new BotHandler(
-                    $this->bot,
-                    $inlineQuery->getFrom()->getId(),
-                    $inlineQuery->getQuery(),
-                    null,
-                    [],
-                    $this->botLink 
-                );
-                $botHandler->handleInlineQuery($inlineQuery->toArray());
-            } elseif ($callbackQuery = $update->getCallbackQuery()) {
+            // --- بازگشت به ساختار اصلی و ساده ---
+            $chatId = null;
+            $message = null;
+            $callbackQuery = null;
+
+            if ($callbackQuery = $update->getCallbackQuery()) {
                 $message = $callbackQuery->getMessage();
-                $botHandler = new BotHandler(
-                    $this->bot,
-                    $message?->getChat()->getId(),
-                    '',
-                    $message?->getMessageId(),
-                    $message?->toArray() ?? [],
-                    $this->botLink
-                );
-                $botHandler->handleCallbackQuery($callbackQuery->toArray());
-            } elseif ($preCheckout = $update->getPreCheckoutQuery()) {
-                $botHandler = new BotHandler(
-                    $this->bot,
-                    $preCheckout->getFrom()->getId(),
-                    null,
-                    null,
-                    [],
-                    $this->botLink
-                );
-                $botHandler->handlePreCheckoutQuery($update->toArray());
-            } elseif ($message = $update->getMessage() ?? $update->getEditedMessage()) {
+                $chatId = $message?->getChat()->getId();
+            } elseif ($msg = $update->getMessage() ?? $update->getEditedMessage()) {
+                $message = $msg;
                 $chatId = $message->getChat()->getId();
+            }
+            // می‌توان انواع دیگر آپدیت را در اینجا اضافه کرد (مانند inline_query)
+
+            if (!$chatId) {
+                Log::info('MTR: Could not determine chatId from update.');
+                return;
+            }
+
+            // ارسال اکشن "typing" فقط در صورتی که پیامی وجود داشته باشد
+            if ($message) {
                 $this->bot->sendChatAction(['chat_id' => $chatId, 'action' => 'typing']);
+            }
 
-                $botHandler = new BotHandler(
-                    $this->bot, 
-                    $chatId,
-                    (string)($message->getText() ?? $message->getCaption() ?? ''),
-                    $message->getMessageId(),
-                    $message->toArray(),
-                    $this->botLink
-                );
+            // ساخت BotHandler با همان ورودی‌های ساده قبلی
+            $botHandler = new BotHandler(
+                $this->bot,
+                $chatId, // فقط شناسه چت را ارسال می‌کنیم
+                (string)($message?->getText() ?? $message?->getCaption() ?? ''),
+                $message?->getMessageId(),
+                $message?->toArray() ?? [],
+                $this->botLink
+            );
 
-                if ($message->getSuccessfulPayment()) {
-                    $botHandler->handleSuccessfulPayment($update->toArray());
-                } else {
-                    $botHandler->handleRequest();
-                }
-            } else {
-                Log::info('MTR: Unhandled update type');
+            // --- مسیریابی ساده بر اساس نوع آپدیت ---
+            if ($callbackQuery) {
+                $botHandler->handleCallbackQuery($callbackQuery->toArray());
+            } elseif ($message?->getSuccessfulPayment()) {
+                $botHandler->handleSuccessfulPayment($update->toArray());
+            } elseif ($message) {
+                $botHandler->handleRequest();
             }
         } catch (\Throwable $e) {
             Log::error('MTR dispatch error: ' . $e->getMessage(), [
